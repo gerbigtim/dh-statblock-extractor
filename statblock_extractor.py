@@ -6,6 +6,20 @@ import unicodedata
 import re
 import json
 
+COMMON_CHAR_REPLACEMENTS = {
+    0x2018: "'",  # ‘ left single quote
+    0x2019: "'",  # ’ right single quote
+    0x201C: '"',  # “ left double quote
+    0x201D: '"',  # ” right double quote
+    0x00A0: ' ',  # non-breaking space
+    0x2013: '-',  # en dash
+    0x2014: '-',  # em dash
+    0x2212: '-',  # minus sign
+    0x2022: '*',  # bullet
+}
+
+
+
 def is_start(li, lines):
   if lines[li].isupper() and lines[li+1].startswith("Tier"):
     return True
@@ -137,28 +151,61 @@ def statblock_text_to_dict(statblock_text):
 
   return statblock_dict
 
+class StatblockScraper:
+  """A Scraper for Daggerheart Adversaries"""
+  def __init__(self, pdf_path: str, page_range: tuple[int,int] = None):
+    self.pdf_path = pdf_path
+    self.doc = pymupdf.open(pdf_path)
+    self.page_range = page_range
+    self.raw_pages = []
+    self.statblocks = []
+
+  def extract_text(self):
+    start_idx, end_idx = self.page_range if self.page_range else (0, None)
+    print(f"{self.page_range},{start_idx}, {end_idx}")
+    for page_num, page in enumerate(self.doc[start_idx: end_idx], start=start_idx):
+      text = page.get_text()
+      self.raw_pages.append((page_num, text))
+
+  def clean_pages(self):
+    def clean_unicode_pua_chars(text: str) -> str:
+      text = unicodedata.normalize("NFKC", text)
+      pua_replacements = {pua_hex: str(digit) for pua_hex, digit in zip(range(0xE540, 0xE550), range(10))}
+      text = text.translate(COMMON_CHAR_REPLACEMENTS | pua_replacements)
+      text = re.sub(r'\s+', ' ', text)
+      return text
+
+    for idx, (page_num, page) in enumerate(self.raw_pages):
+      self.raw_pages[idx] = (page_num, clean_unicode_pua_chars(page))
+
+
+
+
+
+  def normalize_lines(self):
+    # split into lines, fix Unicode, strip lines
+    pass
+
+  def detect_statblock_start(self, line_idx, lines):
+    pass
+
+  def parse_statblock(self, line_idx, lines):
+    pass
+
+  def save_to_json(self, path):
+    pass
+
+
+
+
+
 
 def main():
-  page_idxs = range(210,240)
+  Scraper = StatblockScraper("pdfs/Daggerheart_Core_Rulebook-5-20-2025.pdf", page_range=(210,240))
+  Scraper.extract_text()
+  Scraper.clean_pages()
 
-  doc = pymupdf.open("pdfs/Daggerheart_Core_Rulebook-5-20-2025.pdf")
-  statblock_texts = []
-
-  for page_idx in page_idxs:
-    page = doc[page_idx]
-    append_statblock_texts(statblock_texts, page)
-
-  statblocks = []
-
-  for statblock_text in statblock_texts:
-    statblocks.append(statblock_text_to_dict(statblock_text))
-
-
-
-  with open('adversaries.json', 'w', encoding='utf-8') as f:
-    json.dump(statblocks, f, ensure_ascii=False, indent=4)
-
-
+  print(Scraper.raw_pages[1])
 
 
 
