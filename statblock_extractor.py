@@ -5,6 +5,11 @@ import pymupdf
 import unicodedata
 import re
 import json
+import spellchecker
+import string
+from typing import Dict
+
+import spellchecker.spellchecker
 
 COMMON_CHAR_REPLACEMENTS = {
     0x2018: "'",  # ‘ left single quote
@@ -151,36 +156,91 @@ def statblock_text_to_dict(statblock_text):
 
   return statblock_dict
 
+def terminates_with_punctuation(text: str) -> bool:
+  """Returns True if text terminates with punctuation character, else False"""
+  return bool(re.match(rf".*[{re.escape(string.punctuation)}]+$", text))
+
+def remove_end_punctuation(text: str) -> str:
+  match = re.match(rf"(?P<text>.*?)(?P<punct>[{re.escape(string.punctuation)}]+)$", text)
+  if match:
+    return match.group("text")
+  else:
+    return text
+
+def are_combinable(word1: str, word2: str) -> bool:
+  """Check if combining 2 words could possibly yield a new word."""
+  if (word1 is None) or (word2 is None):
+    return False
+  if terminates_with_punctuation(word1):
+    return False
+  if word2.istitle():
+    return False
+  return True
+
+def combined_more_likely(word1: str, word2: str, wf_dict: Dict) -> bool:
+  if not are_combinable(word1, word2):
+    return False
+
+  word1 = word1.lower()
+  word2 = remove_end_punctuation(word2).lower()
+  merged = word1 + word2
+
+  return wf_dict[merged] > min(wf_dict[word1], wf_dict[word2])
+
+
+def repair_split_words(text: str) -> str:
+  spell = spellchecker.SpellChecker()
+  wf_dict = spell.word_frequency.dictionary
+  words = text.split()
+  repaired = []
+  word_idx = 0
+
+  last_combined = False
+  while word_idx < len(words):
+    word_before = words[word_idx - 1] if word_idx > 0 else None
+    word_before = repaired[-1] if last_combined else word_before
+    word = words[word_idx]
+    word_after = words[word_idx] if word_idx + 1 < len(words) else None
+
+    if combined_more_likely(word_before, word, wf_dict):
+      repaired[-1] = word_before + word
+      last_combined = True
+      word_idx += 1
+    elif combined_more_likely(word, word_after, wf_dict):
+      repaired.append(word + word_after)
+      last_combined = True
+      word_idx += 2
+    else:
+      repaired.append(word)
+      last_combined = False
+      word_idx += 1
+
+  return ' '.join(repaired)
+
 class StatblockScraper:
   """A Scraper for Daggerheart Adversaries"""
   def __init__(self, pdf_path: str, page_range: tuple[int,int] = None):
     self.pdf_path = pdf_path
     self.doc = pymupdf.open(pdf_path)
     self.page_range = page_range
-    self.raw_pages = []
+    self.raw_pages = {}
     self.statblocks = []
 
   def extract_text(self):
     start_idx, end_idx = self.page_range if self.page_range else (0, None)
     print(f"{self.page_range},{start_idx}, {end_idx}")
     for page_num, page in enumerate(self.doc[start_idx: end_idx], start=start_idx):
-      text = page.get_text()
-      self.raw_pages.append((page_num, text))
+      self.raw_pages[page_num] = page.get_text()
 
   def clean_pages(self):
     def clean_unicode_pua_chars(text: str) -> str:
       text = unicodedata.normalize("NFKC", text)
       pua_replacements = {pua_hex: str(digit) for pua_hex, digit in zip(range(0xE540, 0xE550), range(10))}
       text = text.translate(COMMON_CHAR_REPLACEMENTS | pua_replacements)
-      text = re.sub(r'\s+', ' ', text)
       return text
 
-    for idx, (page_num, page) in enumerate(self.raw_pages):
-      self.raw_pages[idx] = (page_num, clean_unicode_pua_chars(page))
-
-
-
-
+    for page_num, page in self.raw_pages.items():
+      self.raw_pages[page_num] = clean_unicode_pua_chars(page)
 
   def normalize_lines(self):
     # split into lines, fix Unicode, strip lines
